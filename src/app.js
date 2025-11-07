@@ -1,120 +1,351 @@
-const express = require('express');
-const path = require('path');
-const cors = require('cors');
-const helmet = require('helmet');
-const compression = require('compression');
-const mongoSanitize = require('express-mongo-sanitize');
-const rateLimit = require('express-rate-limit');
-const swaggerUi = require('swagger-ui-express');
-const swaggerSpec = require('./config/swagger');
+// src/config/api.js
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://backagriteranga.onrender.com/api/v1';
 
-const authRoutes = require('./routes/auth.routes');
-const userRoutes = require('./routes/user.routes');
-const productRoutes = require('./routes/product.routes');
-const orderRoutes = require('./routes/order.routes');
-const cartRoutes = require('./routes/cart.routes');
-const deliveryRoutes = require('./routes/delivery.routes');
-const messageRoutes = require('./routes/message.routes');
-const formationRoutes = require('./routes/formation.routes');
-const adminRoutes = require('./routes/admin.routes');
+// Configuration API
+export const apiConfig = {
+  baseURL: API_BASE_URL,
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json'
+  }
+};
 
-const app = express();
-
-// Middlewares de sécurité
-app.use(helmet({
-  // Autoriser le chargement de ressources (images) depuis d'autres origines
-  crossOriginResourcePolicy: { policy: 'cross-origin' },
-  // Permettre les popups (Google) et postMessage
-  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' }
-}));
-
-// CORS: autoriser le front local (localhost/127.0.0.1, tout port) et FRONTEND_URL
-const FRONTEND_URL = process.env.FRONTEND_URL;
-const localRegex = /^http:\/\/(localhost|127\.0\.0\.1)(:\\d+)?$/i;
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true); // allow non-browser requests
-    if ((FRONTEND_URL && origin === FRONTEND_URL) || localRegex.test(origin)) {
-      return callback(null, true);
+// Helper pour obtenir le token
+const getAuthToken = () => {
+  const user = localStorage.getItem('user');
+  if (user) {
+    try {
+      const userData = JSON.parse(user);
+      return userData.token;
+    } catch (e) {
+      console.error('Error parsing user data:', e);
+      return null;
     }
-    return callback(null, false);
+  }
+  return null;
+};
+
+// Fonction request générique
+export const request = async (endpoint, options = {}) => {
+  const token = getAuthToken();
+  
+  const config = {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token && { 'Authorization': `Bearer ${token}` }),
+      ...options.headers
+    }
+  };
+
+  try {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
+    
+    // Gérer les erreurs HTTP
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({
+        message: `HTTP error! status: ${response.status}`
+      }));
+      throw new Error(error.message || `HTTP error! status: ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('API Error:', error);
+    throw error;
+  }
+};
+
+// Fonctions API spécifiques
+export const api = {
+  // Produits
+  getProducts: (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    return request(`/products${queryString ? `?${queryString}` : ''}`);
   },
-  credentials: true
-}));
+  
+  getProduct: (id) => {
+    return request(`/products/${id}`);
+  },
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limite de 100 requêtes par IP
-});
-app.use('/api/', limiter);
+  createProduct: (productData) => {
+    return request('/products', {
+      method: 'POST',
+      body: JSON.stringify(productData)
+    });
+  },
 
-// Body parser
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+  updateProduct: (id, productData) => {
+    return request(`/products/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(productData)
+    });
+  },
 
-// Data sanitization contre NoSQL injection
-app.use(mongoSanitize());
+  deleteProduct: (id) => {
+    return request(`/products/${id}`, {
+      method: 'DELETE'
+    });
+  },
 
-// Compression
-app.use(compression());
+  // Commandes
+  getOrders: (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    return request(`/orders${queryString ? `?${queryString}` : ''}`);
+  },
 
-// Static files: serve uploaded images with permissive cross-origin headers
-app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads'), {
-  setHeaders: (res) => {
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    res.setHeader('Access-Control-Allow-Origin', '*');
+  createOrder: (orderData) => {
+    return request('/orders', {
+      method: 'POST',
+      body: JSON.stringify(orderData)
+    });
+  },
+
+  getOrder: (id) => {
+    return request(`/orders/${id}`);
+  },
+
+  updateOrderStatus: (id, status) => {
+    return request(`/orders/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status })
+    });
+  },
+
+  cancelOrder: (id) => {
+    return request(`/orders/${id}/cancel`, {
+      method: 'PATCH'
+    });
+  },
+
+  getProducerOrders: () => {
+    return request('/orders/producer/list');
+  },
+
+  getDelivererOrders: () => {
+    return request('/orders/deliverer/list');
+  },
+
+  getTransactionHistory: (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    return request(`/orders/history${queryString ? `?${queryString}` : ''}`);
+  },
+
+  // Panier
+  getCart: () => {
+    return request('/cart');
+  },
+
+  addToCart: (productId, quantity) => {
+    return request('/cart', {
+      method: 'POST',
+      body: JSON.stringify({ productId, quantity })
+    });
+  },
+
+  updateCartItem: (productId, quantity) => {
+    return request(`/cart/${productId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ quantity })
+    });
+  },
+
+  removeFromCart: (productId) => {
+    return request(`/cart/${productId}`, {
+      method: 'DELETE'
+    });
+  },
+
+  clearCart: () => {
+    return request('/cart', {
+      method: 'DELETE'
+    });
+  },
+
+  // Auth
+  login: (credentials) => {
+    return request('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(credentials)
+    });
+  },
+
+  register: (userData) => {
+    return request('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(userData)
+    });
+  },
+
+  logout: () => {
+    return request('/auth/logout', {
+      method: 'POST'
+    });
+  },
+
+  forgotPassword: (email) => {
+    return request('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email })
+    });
+  },
+
+  resetPassword: (token, password) => {
+    return request(`/auth/reset-password/${token}`, {
+      method: 'POST',
+      body: JSON.stringify({ password })
+    });
+  },
+
+  // User
+  getProfile: () => {
+    return request('/users/profile');
+  },
+
+  updateProfile: (data) => {
+    return request('/users/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(data)
+    });
+  },
+
+  changePassword: (data) => {
+    return request('/users/change-password', {
+      method: 'PATCH',
+      body: JSON.stringify(data)
+    });
+  },
+
+  deleteAccount: () => {
+    return request('/users/account', {
+      method: 'DELETE'
+    });
+  },
+
+  getMyStats: () => {
+    return request('/users/stats');
+  },
+
+  getProducerDashboard: () => {
+    return request('/users/producer/dashboard');
+  },
+
+  getDelivererStats: () => {
+    return request('/users/deliverer/stats');
+  },
+
+  getProducers: (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    return request(`/users/producers${queryString ? `?${queryString}` : ''}`);
+  },
+
+  updatePreferences: (preferences) => {
+    return request('/users/preferences', {
+      method: 'PATCH',
+      body: JSON.stringify(preferences)
+    });
+  },
+
+  // Livraisons
+  getDeliveries: (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    return request(`/deliveries${queryString ? `?${queryString}` : ''}`);
+  },
+
+  getDelivery: (id) => {
+    return request(`/deliveries/${id}`);
+  },
+
+  updateDeliveryStatus: (id, status, location) => {
+    return request(`/deliveries/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, location })
+    });
+  },
+
+  acceptDelivery: (id) => {
+    return request(`/deliveries/${id}/accept`, {
+      method: 'POST'
+    });
+  },
+
+  // Messages
+  getMessages: (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    return request(`/messages${queryString ? `?${queryString}` : ''}`);
+  },
+
+  sendMessage: (messageData) => {
+    return request('/messages', {
+      method: 'POST',
+      body: JSON.stringify(messageData)
+    });
+  },
+
+  getConversation: (userId) => {
+    return request(`/messages/conversation/${userId}`);
+  },
+
+  markAsRead: (messageId) => {
+    return request(`/messages/${messageId}/read`, {
+      method: 'PATCH'
+    });
+  },
+
+  // Formations
+  getFormations: (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    return request(`/formations${queryString ? `?${queryString}` : ''}`);
+  },
+
+  getFormation: (id) => {
+    return request(`/formations/${id}`);
+  },
+
+  enrollFormation: (id) => {
+    return request(`/formations/${id}/enroll`, {
+      method: 'POST'
+    });
+  },
+
+  completeLesson: (formationId, lessonId) => {
+    return request(`/formations/${formationId}/lessons/${lessonId}/complete`, {
+      method: 'POST'
+    });
+  },
+
+  // Admin
+  adminGetUsers: (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    return request(`/admin/users${queryString ? `?${queryString}` : ''}`);
+  },
+
+  adminUpdateUser: (id, data) => {
+    return request(`/admin/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data)
+    });
+  },
+
+  adminDeleteUser: (id) => {
+    return request(`/admin/users/${id}`, {
+      method: 'DELETE'
+    });
+  },
+
+  adminGetStats: () => {
+    return request('/admin/stats');
+  },
+
+  adminGetProducts: (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    return request(`/admin/products${queryString ? `?${queryString}` : ''}`);
+  },
+
+  adminGetOrders: (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    return request(`/admin/orders${queryString ? `?${queryString}` : ''}`);
   }
-}));
+};
 
-// Also serve when uploads are saved under src/uploads (dev environment)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
-  setHeaders: (res) => {
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  }
-}));
-
-// Swagger Documentation
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-
-// Routes
-app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/users', userRoutes);
-app.use('/api/v1/products', productRoutes);
-app.use('/api/v1/orders', orderRoutes);
-app.use('/api/v1/cart', cartRoutes);
-app.use('/api/v1/deliveries', deliveryRoutes);
-app.use('/api/v1/messages', messageRoutes);
-app.use('/api/v1/formations', formationRoutes);
-app.use('/api/v1/admin', adminRoutes);
-
-// Route de test
-app.get('/api/v1/health', (req, res) => {
-  res.status(200).json({
-    status: 'success',
-    message: 'API Agriculture fonctionne correctement'
-  });
-});
-
-// Gestion des routes non trouvées
-app.all('*', (req, res) => {
-  res.status(404).json({
-    status: 'error',
-    message: `Route ${req.originalUrl} non trouvée`
-  });
-});
-
-// Gestion globale des erreurs
-app.use((err, req, res, next) => {
-  err.statusCode = err.statusCode || 500;
-  err.status = err.status || 'error';
-
-  res.status(err.statusCode).json({
-    status: err.status,
-    message: err.message,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
-});
-
-module.exports = app;
+export default api;
