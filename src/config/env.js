@@ -2,7 +2,6 @@
  * Configuration des variables d'environnement
  * Centralise l'accès aux variables d'environnement
  */
-
 module.exports = {
   // Environnement
   NODE_ENV: process.env.NODE_ENV || 'development',
